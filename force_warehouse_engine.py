@@ -82,7 +82,8 @@ def load_json_with_comments(file_path):
         raise json.JSONDecodeError(f"Error parsing JSON: {e}", e.doc, e.pos)
 
 def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, table_name=None, 
-                       column_name=None, result="", scan_timestamp=None, extra_data=None):
+                       column_name=None, result="", scan_timestamp=None, extra_data=None,
+                       remediation_script=None):
     """Helper function to create a standardized finding data dictionary."""
     finding_data = {
         "rule_id": rule.get("id"),
@@ -98,7 +99,8 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, tabl
         "column_name": column_name,
         "result": result,
         "scan_date": scan_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-        "level": rule.get("level", "database")
+        "level": rule.get("level", "database"),
+        "remediation_script": remediation_script
     }
     
     # Add any extra data if provided
@@ -132,6 +134,7 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
             rule_id = rule.get("id")
             content = rule.get("content", "")
             sql_query = rule.get("sql_query", "")
+            remediation_template = rule.get("remediation_template", "")
             
             # Process SQL query rules
             if content == "query" and sql_query:
@@ -168,6 +171,21 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
                                 extra_data = {col: row[col] for col in query_results.columns 
                                              if col not in ["table_name", "column_name", "result"]}
                                 
+                                # Build remediation script for anomalies
+                                row_result = row.get("result", "") if "result" in query_results.columns else ""
+                                is_anomaly = isinstance(row_result, str) and "Anomaly - ERR_1001" in row_result
+                                remediation = None
+                                if is_anomaly and remediation_template:
+                                    tbl = row.get("table_name", "") if "table_name" in query_results.columns else ""
+                                    col = row.get("column_name", "") if "column_name" in query_results.columns else ""
+                                    remediation = remediation_template.replace(
+                                        "{table_name}", str(tbl) if tbl else ""
+                                    ).replace(
+                                        "{column_name}", str(col) if col else ""
+                                    ).replace(
+                                        "{warehouse_name}", warehouse_name
+                                    )
+                                
                                 # Add finding with all data
                                 all_findings.append(create_finding_data(
                                     rule, 
@@ -178,7 +196,8 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
                                     row.get("column_name") if "column_name" in query_results.columns else None,
                                     row.get("result") if "result" in query_results.columns else "Finding detected",
                                     scan_timestamp,
-                                    extra_data
+                                    extra_data,
+                                    remediation
                                 ))
                         else:
                             # No issues found, add a "clean" entry

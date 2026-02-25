@@ -410,6 +410,7 @@ def get_parquet_metadata(table_path):
 def analyze_rule(rule, df_all, parquet_metadata_df=None):
     """
     Executes the PySpark or DuckDB query from the rule and returns the output
+    and an optional dynamic remediation script.
     
     Args:
         rule: The rule to analyze from the JSON file
@@ -417,7 +418,7 @@ def analyze_rule(rule, df_all, parquet_metadata_df=None):
         parquet_metadata_df: DataFrame with parquet metadata (for DuckDB queries)
         
     Returns:
-        The output from executing the query
+        Tuple of (output_text, dynamic_remediation_script_or_None)
     """
     rule_id = rule.get("id", "")
     pyspark_query = rule.get("pyspark_query", "")
@@ -446,10 +447,10 @@ def analyze_rule(rule, df_all, parquet_metadata_df=None):
             
             output = output_buffer.getvalue().strip()
 
-            return output
+            return output, None
             
         except Exception:
-            return f"Error analyzing rule {rule_id} with DuckDB"
+            return f"Error analyzing rule {rule_id} with DuckDB", None
     
     # If not a DuckDB query, use PySpark query
     elif pyspark_query:
@@ -492,20 +493,27 @@ def analyze_rule(rule, df_all, parquet_metadata_df=None):
                     
                     # Execute the query directly
                     exec(modified_query, exec_globals, exec_locals)
+                    
+                    # Check if rule set a remediation_script variable
+                    if 'remediation_script' in exec_locals:
+                        exec_globals['_remediation_script'] = exec_locals['remediation_script']
                 except Exception:
                     pass
             
             output = output_buffer.getvalue().strip()
             
             if not output:
-                return ""  # Leerer String statt Meldung "Analysis for rule ... with no issues to report"
+                return "", None
+            
+            # Check if the rule dynamically set a remediation_script
+            dynamic_remediation = exec_globals.get('_remediation_script', None)
                 
-            return output
+            return output, dynamic_remediation
         
         except Exception:
-            return f"Error analyzing rule {rule_id}"
+            return f"Error analyzing rule {rule_id}", None
     else:
-        return ""  # Leerer String statt "No query available"
+        return "", None
 
 # Function to analyze rules for a specific table
 def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lakehouse_id=None):
@@ -563,6 +571,7 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
         status_enabled = rule.get("status", "true") == "true"
         severity = rule.get("severity", 3)
         level = rule.get("level", "table")
+        remediation_template = rule.get("remediation_template", "")
         
         # Only check enabled rules
         if not status_enabled:
@@ -572,12 +581,30 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
         if "duckdb_query" in rule and rule["duckdb_query"]:
             if parquet_metadata_df.empty:
                 rule_result = "Parquet metadata not available for this table"
+                dynamic_remediation = None
             else:
-                rule_result = analyze_rule(rule, df_all, parquet_metadata_df)
+                rule_result, dynamic_remediation = analyze_rule(rule, df_all, parquet_metadata_df)
         else:
-            rule_result = analyze_rule(rule, df_all)
+            rule_result, dynamic_remediation = analyze_rule(rule, df_all)
         
-        # Add result with single result column - don't include any headers in the rule_result itself
+        # Build remediation script: prefer dynamic (from rule code), fallback to template
+        remediation_script = None
+        is_anomaly = isinstance(rule_result, str) and "Anomaly - ERR_1001" in rule_result
+        
+        if is_anomaly:
+            if dynamic_remediation:
+                remediation_script = dynamic_remediation
+            elif remediation_template:
+                # Replace placeholders in template
+                remediation_script = remediation_template.replace(
+                    "{table_name}", lh_info.get('table_name', '')
+                ).replace(
+                    "{lakehouse_name}", lh_info.get('lakehouse_name', '')
+                ).replace(
+                    "{full_table_name}", f"{lh_info.get('lakehouse_name', '')}.{lh_info.get('table_name', '')}"
+                )
+        
+        # Add result with single result column
         result = {
             'rule_id': rule_id,
             'category': category,
@@ -590,7 +617,8 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
             'lakehouse_id': lakehouse_id,
             'workspace_id': workspace_id,
             'workspace_name': workspace_name,
-            'rule_result': rule_result.strip() if isinstance(rule_result, str) else rule_result
+            'rule_result': rule_result.strip() if isinstance(rule_result, str) else rule_result,
+            'remediation_script': remediation_script
         }
         rules_results.append(result)
     

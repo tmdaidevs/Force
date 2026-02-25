@@ -426,9 +426,15 @@ def main():
         )
 
     try:
+        # Get Fabric storage token for OneLake authentication
+        storage_options = {
+            "bearer_token": notebookutils.credentials.getToken('storage'),
+            "use_fabric_endpoint": "true"
+        }
         findings_polars.write_delta(
             f"{target_lakehouse}/Tables/{OUTPUT_TABLE_NAME}",
-            mode="overwrite"
+            mode="overwrite",
+            storage_options=storage_options
         )
         print(f"Successfully wrote {findings_polars.height} findings to {target_lakehouse}/Tables/{OUTPUT_TABLE_NAME}")
     except Exception as e:

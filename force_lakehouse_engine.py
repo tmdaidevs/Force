@@ -739,17 +739,25 @@ def main():
             )
 
         try:
+            # Get Fabric storage token for OneLake authentication
+            storage_options = {
+                "bearer_token": notebookutils.credentials.getToken('storage'),
+                "use_fabric_endpoint": "true"
+            }
+
             # Always use overwrite mode for the main table
             findings_polars.write_delta(
                 f"{target_lakehouse}/Tables/{target_table}",
-                mode="overwrite"
+                mode="overwrite",
+                storage_options=storage_options
             )
             print(f"Analysis results successfully written to {target_lakehouse}/Tables/{target_table} using overwrite mode")
 
             # Always use append mode for the history table
             findings_polars.write_delta(
                 f"{target_lakehouse}/Tables/{target_table_history}",
-                mode="append"
+                mode="append",
+                storage_options=storage_options
             )
             print(f"Analysis results successfully written to {target_lakehouse}/Tables/{target_table_history} using append mode")
 

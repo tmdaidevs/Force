@@ -13,14 +13,9 @@ try:
     import sempy_labs
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "-q"])
-try:
-    import polars
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "polars", "deltalake", "-q"])
 
 import pandas as pd
 import json
-import notebookutils
 import os
 import re
 from datetime import datetime, timezone
@@ -28,7 +23,6 @@ from datetime import datetime, timezone
 # Initialize Fabric authentication context FIRST
 import sempy.fabric as fabric
 import sempy_labs as labs
-import polars as pl
 
 # ============================================================
 # CONFIGURATION - Edit this section before running
@@ -48,8 +42,9 @@ TARGET_LAKEHOUSE_NAME = "YourLakehouseName"
 #   WORKSPACE_FILTER = ["Sales Analytics", "Finance Reporting"]
 WORKSPACE_FILTER = []
 
-# Rules file path (relative to notebook location).
-# Default expects the JSON file alongside this notebook.
+# Rules file path (relative to notebook resources or absolute).
+# If running from a Fabric Notebook, the file should be uploaded to the
+# notebook's "Resources" folder, or provide the full path.
 RULES_FILE_PATH = "force_warehouse_rules.json"
 
 # Output table name in the target Lakehouse.
@@ -60,17 +55,45 @@ OUTPUT_TABLE_NAME = "force_warehouse_analysis"
 # ============================================================
 
 
+def resolve_rules_path(rules_path):
+    """Resolve the rules file path, checking multiple locations."""
+    # Try as-is first
+    if os.path.exists(rules_path):
+        return rules_path
+    
+    # Try notebook resources path (Fabric Notebook)
+    try:
+        import notebookutils
+        nb_res = notebookutils.nbResPath
+        candidate = os.path.join(nb_res, rules_path)
+        if os.path.exists(candidate):
+            return candidate
+    except Exception:
+        pass
+    
+    # Try common Fabric Notebook paths
+    for prefix in [
+        "/lakehouse/default/Files",
+        "/home/trusted-service-user/work",
+        ".",
+    ]:
+        candidate = os.path.join(prefix, rules_path)
+        if os.path.exists(candidate):
+            return candidate
+    
+    raise FileNotFoundError(
+        f"Rules file not found: '{rules_path}'. "
+        f"Upload it to the Notebook Resources folder or to your default Lakehouse Files. "
+        f"Current directory: {os.getcwd()}"
+    )
+
+
 def get_connection(warehouse_name, workspace_id):
-    """Open a connection to a specific Fabric Warehouse artifact.
+    """Open a SQL connection to a specific Fabric Warehouse.
     
-    Args:
-        warehouse_name: Name of the warehouse
-        workspace_id: ID of the workspace containing the warehouse
-    
-    Returns:
-        Connection object to the specified warehouse
+    Uses sempy_labs to execute queries against the warehouse.
     """
-    return notebookutils.data.connect_to_artifact(warehouse_name, workspace_id, "Warehouse")
+    return labs.ConnectWarehouse(warehouse=warehouse_name, workspace=workspace_id)
 
 def load_json_with_comments(file_path):
     """Load a JSON file that may contain comments."""
@@ -127,18 +150,17 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, tabl
 
 def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_name):
     """Analyze a specific warehouse using the rules defined in the JSON file."""
-    # Get current timestamp in ISO 8601 format with UTC timezone (Z)
     scan_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     
-    # Read the JSON file with comment handling
-    data = load_json_with_comments(rules_file_path)
+    # Resolve and read the rules file
+    resolved_path = resolve_rules_path(rules_file_path)
+    data = load_json_with_comments(resolved_path)
     rules = data.get("rules", [])
     all_findings = []
     
     try:
-        # Get connection to the specific Fabric Warehouse
+        # Connect to the specific Fabric Warehouse
         print(f"Connecting to warehouse '{warehouse_name}' in workspace '{workspace_name}' ({workspace_id})...")
-        connection = get_connection(warehouse_name, workspace_id)
         
         # Process each active rule
         for rule in rules:
@@ -155,8 +177,12 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
             # Process SQL query rules
             if content == "query" and sql_query:
                 try:
-                    # Execute the SQL query
-                    query_results = connection.query(sql_query)
+                    # Execute the SQL query via sempy_labs
+                    query_results = labs.execute_queries(
+                        sql_query,
+                        warehouse=warehouse_name,
+                        workspace=workspace_id
+                    )
                     
                     # If DataFrame is returned and has results
                     if isinstance(query_results, pd.DataFrame):
@@ -414,29 +440,13 @@ def main():
     display(all_findings_df)
 
     # Build target Lakehouse path from configuration
-    target_lakehouse = f"abfss://{TARGET_WORKSPACE_NAME}@onelake.dfs.fabric.microsoft.com/{TARGET_LAKEHOUSE_NAME}.Lakehouse"
-
-    # Convert to Polars DataFrame
-    findings_polars = pl.from_pandas(all_findings_df)
-
-    # Convert scan_date from string to timestamp
-    if 'scan_date' in findings_polars.columns:
-        findings_polars = findings_polars.with_columns(
-            pl.col('scan_date').str.to_datetime(format='%Y-%m-%dT%H:%M:%S%.fZ', time_zone='UTC')
-        )
+    target_table_path = f"abfss://{TARGET_WORKSPACE_NAME}@onelake.dfs.fabric.microsoft.com/{TARGET_LAKEHOUSE_NAME}.Lakehouse/Tables/{OUTPUT_TABLE_NAME}"
 
     try:
-        # Get Fabric storage token for OneLake authentication
-        storage_options = {
-            "bearer_token": notebookutils.credentials.getToken('storage'),
-            "use_fabric_endpoint": "true"
-        }
-        findings_polars.write_delta(
-            f"{target_lakehouse}/Tables/{OUTPUT_TABLE_NAME}",
-            mode="overwrite",
-            storage_options=storage_options
-        )
-        print(f"Successfully wrote {findings_polars.height} findings to {target_lakehouse}/Tables/{OUTPUT_TABLE_NAME}")
+        # Convert pandas to Spark DataFrame and write as Delta
+        spark_df = spark.createDataFrame(all_findings_df.astype(str))
+        spark_df.write.format("delta").mode("overwrite").save(target_table_path)
+        print(f"Successfully wrote {len(all_findings_df)} findings to {target_table_path}")
     except Exception as e:
         print(f"Error writing to Delta table: {str(e)}")
 

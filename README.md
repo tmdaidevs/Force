@@ -1,17 +1,27 @@
-# Force Lakehouse Scanner
+# Force — Microsoft Fabric Scanner
 
 > **Important:** This project is designed to run exclusively inside a **Microsoft Fabric Notebook**. It relies on Fabric-provided APIs (`notebookutils`, `sempy_labs`) and OneLake connectivity that are only available in the Fabric runtime. It cannot be run locally or in standard Jupyter environments.
 
-A Microsoft Fabric Notebook that scans all Lakehouses across your tenant and evaluates them against 32 best-practice rules covering structure, schema, performance, compression, maintenance, Delta Lake, and data quality.
+A collection of Microsoft Fabric Notebooks that scan all **Lakehouses** and **Warehouses** across your tenant and evaluate them against best-practice rules covering structure, schema, performance, compression, maintenance, Delta Lake, data quality, security, and more.
 
 ## What It Does
 
+### Lakehouse Scanner (`force_lakehouse_engine.py`)
+
 1. Discovers all Lakehouses across your Fabric workspaces
 2. Reads Delta log metadata and Parquet file statistics for each table
-3. Runs 32 built-in rules (defined in `force_lakehouse_rules.json`)
+3. Runs **40 built-in rules** (defined in `force_lakehouse_rules.json`)
 4. Writes findings to a target Lakehouse as two Delta tables:
    - `force_lakehouse_analysis` — latest results, overwritten each run
    - `force_lakehouse_analysis_history` — appended each run for trending
+
+### Warehouse Scanner (`force_warehouse_engine.py`)
+
+1. Discovers all Warehouses across your Fabric workspaces
+2. Connects to each Warehouse and executes T-SQL analysis queries
+3. Runs **51 active rules** (defined in `force_warehouse_rules.json`)
+4. Writes findings to a target Lakehouse as a Delta table:
+   - `force_warehouse_analysis` — latest results, overwritten each run
 
 ## Prerequisites
 
@@ -22,11 +32,21 @@ A Microsoft Fabric Notebook that scans all Lakehouses across your tenant and eva
 
 ## Setup
 
+### Lakehouse Scanner
+
 1. Import `force_lakehouse_engine.py` into a Fabric Notebook
 2. Upload `force_lakehouse_rules.json` to the same notebook resource folder (or the Lakehouse Files section — adjust `RULES_FILE_PATH` accordingly)
 3. Edit the **CONFIGURATION** section at the top of the notebook
 
+### Warehouse Scanner
+
+1. Import `force_warehouse_engine.py` into a Fabric Notebook
+2. Upload `force_warehouse_rules.json` to the same notebook resource folder
+3. Edit the **CONFIGURATION** section at the top of the notebook
+
 ## Configuration
+
+### Lakehouse Scanner
 
 Edit the configuration variables at the top of `force_lakehouse_engine.py` before running the notebook:
 
@@ -55,6 +75,33 @@ OUTPUT_TABLE_HISTORY_NAME = "force_lakehouse_analysis_history"
 | `OUTPUT_TABLE_NAME` | No | `force_lakehouse_analysis` | Delta table name for latest results |
 | `OUTPUT_TABLE_HISTORY_NAME` | No | `force_lakehouse_analysis_history` | Delta table name for historical results |
 
+### Warehouse Scanner
+
+Edit the configuration variables at the top of `force_warehouse_engine.py` before running the notebook:
+
+```python
+# Target Lakehouse for writing analysis results.
+TARGET_WORKSPACE_NAME = "YourWorkspaceName"
+TARGET_LAKEHOUSE_NAME = "YourLakehouseName"
+
+# Workspace scope: [] = scan all, or list specific IDs/names.
+WORKSPACE_FILTER = []
+
+# Rules file path (relative to notebook location).
+RULES_FILE_PATH = "force_warehouse_rules.json"
+
+# Output table name in the target Lakehouse.
+OUTPUT_TABLE_NAME = "force_warehouse_analysis"
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `TARGET_WORKSPACE_NAME` | Yes | — | Workspace name where results are written |
+| `TARGET_LAKEHOUSE_NAME` | Yes | — | Lakehouse name for storing results |
+| `WORKSPACE_FILTER` | No | `[]` (all) | List of workspace IDs or names to scan |
+| `RULES_FILE_PATH` | No | `force_warehouse_rules.json` | Path to the rules JSON file |
+| `OUTPUT_TABLE_NAME` | No | `force_warehouse_analysis` | Delta table name for results |
+
 ### Examples
 
 Scan all workspaces:
@@ -74,7 +121,9 @@ WORKSPACE_FILTER = ["a1b2c3d4-e5f6-7890-abcd-ef1234567890", "b2c3d4e5-f6a7-8901-
 
 ## Rules
 
-The scanner includes 32 rules across these categories:
+### Lakehouse Rules (40 rules)
+
+The Lakehouse scanner includes 40 rules across these categories:
 
 | Category | Rules | Examples |
 |----------|-------|---------|
@@ -90,7 +139,29 @@ The scanner includes 32 rules across these categories:
 
 Each rule produces either **Optimized** or **Anomaly** as a finding, along with a severity level and recommendation.
 
-### Adding Custom Rules
+### Warehouse Rules (60 rules, 51 active)
+
+The Warehouse scanner includes 60 rules (51 active, 9 disabled for Fabric incompatibility) across these categories:
+
+| Category | Rules | Examples |
+|----------|-------|----------|
+| Data Quality | RL001, RL003, RL007-RL009, RL013-RL014, RL028, RL032-RL034, RL036-RL037 | NULL values, FK integrity, data types, duplicates, audit columns |
+| Performance | RL017-RL020, RL031 | Column sizing, statistics, computed columns |
+| Security | RL012, RL021, RL023, RL035 | Data masking, db_owner privileges, RLS, sensitive data |
+| Maintainability | RL004-RL005, RL010-RL011, RL015-RL016, RL024-RL027, RL029, RL038-RL040, RL043 | Naming, documentation, deprecated types, wide tables, cross-schema |
+| Concurrency | RL115-RL116 | Snapshot isolation, read committed snapshot |
+| Reliability | RL114, RL127 | Page verify, clean shutdown |
+| Compatibility | RL120 | Compatibility level |
+| Standards | RL121 | ANSI SQL settings |
+| Availability | RL123-RL124 | Database state, user access |
+| Result Caching | RL125 | Result set caching |
+| Data Management | RL126, RL128-RL129 | Containment, full-text search, data retention |
+
+Rules disabled for Fabric incompatibility are marked with `"status": "false"` and a `fabric_note` explanation.
+
+Each rule produces a `result` column containing the finding details and an **Indicator** line (`Optimized - OPT_2001` or `Anomaly - ERR_1001`).
+
+### Adding Custom Lakehouse Rules
 
 You can add your own rules to `force_lakehouse_rules.json`. Each rule is a JSON object inside the `"rules"` array. There are two types of rules: **PySpark rules** (analyze Delta log metadata) and **DuckDB rules** (analyze Parquet file metadata).
 
@@ -220,6 +291,52 @@ DuckDB rules are SQL queries executed against a table called `df`, which contain
 - PySpark rules use `print()` for output — all printed text is captured as the rule result.
 - DuckDB queries must return exactly one row with one column named `output`.
 - Test your rule by running it against a single table before adding it to the rules file.
+
+### Adding Custom Warehouse Rules
+
+You can add your own rules to `force_warehouse_rules.json`. Each rule is a JSON object inside the `"rules"` array containing a T-SQL query.
+
+#### Warehouse Rule Schema
+
+```json
+{
+  "id": "RL044",
+  "category": "YourCategory",
+  "description": "What this rule checks.",
+  "sql_query": "SELECT ... AS table_name, ... AS column_name, ... AS result",
+  "recommendation": "What the user should do if the rule finds an issue.",
+  "status": "true",
+  "severity": 2,
+  "content": "query",
+  "level": "table"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | Yes | Unique rule ID (e.g., `RL044`). Must not conflict with existing IDs. |
+| `category` | Yes | Grouping category (e.g., `Data Quality`, `Performance`, `Security`, `Maintainability`). |
+| `description` | Yes | Short description of what the rule checks. |
+| `sql_query` | Yes | T-SQL query returning columns `table_name`, `column_name`, and `result`. |
+| `recommendation` | Yes | Actionable guidance shown when the rule detects an issue. |
+| `status` | Yes | `"true"` to enable, `"false"` to disable. |
+| `severity` | Yes | `1` (critical), `2` (warning), or `3` (informational). |
+| `content` | Yes | Set to `"query"`. |
+| `level` | Yes | Scope: `"database"`, `"table"`, or `"column"`. |
+
+The `result` column **must** end with an indicator line:
+
+```
+Indicator: Optimized - OPT_2001
+```
+or
+```
+Indicator: Anomaly - ERR_1001
+```
+
+Use `CHAR(10)` for line breaks within the result string.
+
+**Fabric-specific limitations:** Triggers, traditional indexes, computed columns, and many `ALTER DATABASE` settings are not available in Fabric Warehouse. Check the [T-SQL surface area documentation](https://learn.microsoft.com/en-us/fabric/data-warehouse/tsql-surface-area) before writing new rules.
 
 ## Dependencies
 

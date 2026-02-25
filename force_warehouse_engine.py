@@ -14,11 +14,34 @@ from datetime import datetime, timezone
 import sempy_labs as labs
 import polars as pl
 
-# Use the correct path to the existing rules file
-lakehouse_force = "abfss://Fabric_Optimization_FEATURE@onelake.dfs.fabric.microsoft.com/Lakehouse.Lakehouse/Tables/"
-delta_path = "abfss://Fabric_Optimization_FEATURE@onelake.dfs.fabric.microsoft.com/Main.warehouse/Tables/dbo/Date"
-rules_file_path = "./builtin/Force/standardized_fabric_warehouse_rules Copy CopyNEWWW.json"
+# ============================================================
+# CONFIGURATION - Edit this section before running
+# ============================================================
 
+# Target Lakehouse for writing analysis results.
+# Replace with the workspace name where results should be stored.
+TARGET_WORKSPACE_NAME = "YourWorkspaceName"
+
+# Replace with the Lakehouse name for storing results.
+TARGET_LAKEHOUSE_NAME = "YourLakehouseName"
+
+# Workspace scope: which workspaces to scan.
+# Set to [] to scan ALL workspaces (requires admin API permissions).
+# Or provide a list of workspace IDs or names, e.g.:
+#   WORKSPACE_FILTER = ["workspace-id-1", "workspace-id-2"]
+#   WORKSPACE_FILTER = ["Sales Analytics", "Finance Reporting"]
+WORKSPACE_FILTER = []
+
+# Rules file path (relative to notebook location).
+# Default expects the JSON file alongside this notebook.
+RULES_FILE_PATH = "force_warehouse_rules.json"
+
+# Output table name in the target Lakehouse.
+OUTPUT_TABLE_NAME = "force_warehouse_analysis"
+
+# ============================================================
+# END CONFIGURATION
+# ============================================================
 
 
 def get_connection(warehouse_name, workspace_id):
@@ -263,7 +286,7 @@ def process_all_workspaces(labs):
     
     return df
 
-def analyze_all_warehouses(rules_file_path, labs):
+def analyze_all_warehouses(rules_file_path, labs, workspace_filter=None):
     """Analyze all warehouses across all workspaces."""
     # Get all workspaces and their items
     print("Getting all workspaces and their items...")
@@ -274,6 +297,16 @@ def analyze_all_warehouses(rules_file_path, labs):
         (all_items_df['item_type'] == 'warehouses') & 
         (all_items_df['name'] != 'DataflowsStagingWarehouse')
     ].copy()
+
+    if workspace_filter:
+        mask = (
+            warehouses_df['workspace_id'].isin(workspace_filter) |
+            warehouses_df['workspace_name'].isin(workspace_filter)
+        )
+        warehouses_df = warehouses_df[mask]
+        if warehouses_df.empty:
+            print(f"Warning: No warehouses matched the workspace filter: {workspace_filter}")
+            return pd.DataFrame()
     
     print(f"Found {len(warehouses_df)} warehouses across {warehouses_df['workspace_id'].nunique()} workspaces")
     
@@ -323,46 +356,48 @@ def analyze_all_warehouses(rules_file_path, labs):
     return all_findings_df
 
 # Main execution block 
-if __name__ == "__main__":
+def main():
+    """Main execution: scan warehouses, analyze rules, write results."""
+    print("Force Warehouse Scanner starting...")
+    print(f"Target: {TARGET_WORKSPACE_NAME}/{TARGET_LAKEHOUSE_NAME}")
+    if WORKSPACE_FILTER:
+        print(f"Workspace filter: {WORKSPACE_FILTER}")
+    else:
+        print("Scope: All workspaces")
+
+    # Analyze all warehouses
+    all_findings_df = analyze_all_warehouses(
+        RULES_FILE_PATH, labs,
+        workspace_filter=WORKSPACE_FILTER if WORKSPACE_FILTER else None
+    )
+
+    if all_findings_df.empty:
+        print("No findings to write to Delta table.")
+        return
+
+    # Display results for notebook view
+    display(all_findings_df)
+
+    # Build target Lakehouse path from configuration
+    target_lakehouse = f"abfss://{TARGET_WORKSPACE_NAME}@onelake.dfs.fabric.microsoft.com/{TARGET_LAKEHOUSE_NAME}.Lakehouse"
+
+    # Convert to Polars DataFrame
+    findings_polars = pl.from_pandas(all_findings_df)
+
+    # Convert scan_date from string to timestamp
+    if 'scan_date' in findings_polars.columns:
+        findings_polars = findings_polars.with_columns(
+            pl.col('scan_date').str.to_datetime()
+        )
+
     try:
-        print("Using sempy_labs to analyze all warehouses...")
-        
-        # Analyze all warehouses - now returns a single DataFrame
-        all_findings_df = analyze_all_warehouses(rules_file_path, labs)
-            
-        # Save results using Polars
-        try:
-            print("\nWriting findings to Delta table...")
-            
-            # Only convert to Polars if we have data (avoids empty DataFrame conversion)
-            if not all_findings_df.empty:
-                # Convert pandas DataFrame to Polars DataFrame
-                findings_polars = pl.from_pandas(all_findings_df)
-            
-                # Convert scan_date from string to timestamp in one operation
-                if 'scan_date' in findings_polars.columns:
-                    findings_polars = findings_polars.with_columns(
-                        pl.col('scan_date').str.to_datetime()
-                    )
-                
-                # Write all findings to a single Delta table
-                print("Writing all findings to Delta table...")
-                findings_polars.write_delta(
-                    f"{lakehouse_force}force_all_findings", 
-                    mode="overwrite"
-                )
-                
-                print(f"Successfully wrote {findings_polars.height} findings to Delta table")
-            else:
-                print("No findings to write to Delta table")
-                
-        except Exception as e:
-            print(f"Error writing to Delta table: {str(e)}")
-            print(f"Error details: {type(e).__name__}, {str(e)}")
-            
+        findings_polars.write_delta(
+            f"{target_lakehouse}/Tables/{OUTPUT_TABLE_NAME}",
+            mode="overwrite"
+        )
+        print(f"Successfully wrote {findings_polars.height} findings to {target_lakehouse}/Tables/{OUTPUT_TABLE_NAME}")
     except Exception as e:
-        print(f"Error analyzing warehouses: {str(e)}")
-        print("Make sure sempy_labs is properly installed and configured.")
-        print("For installation: pip install sempy-labs")
-        
-display(all_findings_df)
+        print(f"Error writing to Delta table: {str(e)}")
+
+# Run
+main()

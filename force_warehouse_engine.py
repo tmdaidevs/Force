@@ -410,7 +410,7 @@ def main():
     # Convert scan_date from string to timestamp
     if 'scan_date' in findings_polars.columns:
         findings_polars = findings_polars.with_columns(
-            pl.col('scan_date').str.to_datetime()
+            pl.col('scan_date').str.to_datetime(format='%Y-%m-%dT%H:%M:%S%.fZ', time_zone='UTC')
         )
 
     try:

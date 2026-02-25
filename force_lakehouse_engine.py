@@ -720,7 +720,7 @@ def main():
         # Convert analysis_timestamp from string to datetime in polars DataFrame
         if 'analysis_timestamp' in findings_polars.columns:
             findings_polars = findings_polars.with_columns(
-                pl.col('analysis_timestamp').str.to_datetime()
+                pl.col('analysis_timestamp').str.to_datetime(format='%Y-%m-%dT%H:%M:%S%.fZ', time_zone='UTC')
             )
 
         try:

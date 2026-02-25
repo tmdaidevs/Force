@@ -30,10 +30,10 @@ import sempy_labs as labs
 
 # Target Lakehouse for writing analysis results.
 # Replace with the workspace name where results should be stored.
-TARGET_WORKSPACE_NAME = "YourWorkspaceName"
+TARGET_WORKSPACE_NAME = "Force"
 
 # Replace with the Lakehouse name for storing results.
-TARGET_LAKEHOUSE_NAME = "YourLakehouseName"
+TARGET_LAKEHOUSE_NAME = "force_results_current"
 
 # Workspace scope: which workspaces to scan.
 # Set to [] to scan ALL workspaces (requires admin API permissions).
@@ -45,7 +45,7 @@ WORKSPACE_FILTER = []
 # Rules file path (relative to notebook resources or absolute).
 # If running from a Fabric Notebook, the file should be uploaded to the
 # notebook's "Resources" folder, or provide the full path.
-RULES_FILE_PATH = "force_warehouse_rules.json"
+RULES_FILE_PATH = "./builtin/force_warehouse_rules.json"
 
 # Output table name in the target Lakehouse.
 OUTPUT_TABLE_NAME = "force_warehouse_analysis"
@@ -159,8 +159,9 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
     all_findings = []
     
     try:
-        # Connect to the specific Fabric Warehouse
+        # Connect to the specific Fabric Warehouse using sempy_labs
         print(f"Connecting to warehouse '{warehouse_name}' in workspace '{workspace_name}' ({workspace_id})...")
+        conn = labs.ConnectWarehouse(warehouse=warehouse_name, workspace=workspace_id)
         
         # Process each active rule
         for rule in rules:
@@ -177,12 +178,8 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
             # Process SQL query rules
             if content == "query" and sql_query:
                 try:
-                    # Execute the SQL query via sempy_labs
-                    query_results = labs.execute_queries(
-                        sql_query,
-                        warehouse=warehouse_name,
-                        workspace=workspace_id
-                    )
+                    # Execute the SQL query via ConnectWarehouse
+                    query_results = conn.query(sql_query)
                     
                     # If DataFrame is returned and has results
                     if isinstance(query_results, pd.DataFrame):

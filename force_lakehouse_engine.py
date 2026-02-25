@@ -5,6 +5,10 @@
 # connectivity that are not available outside the Fabric runtime.
 # =============================================================================
 
+import subprocess
+import sys
+subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "-q"])
+
 import sempy_labs as labs
 import pandas as pd
 import notebookutils

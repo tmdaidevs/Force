@@ -7,7 +7,7 @@
 
 import subprocess
 import sys
-subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "-q"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "polars", "deltalake", "-q"])
 
 import pandas as pd
 import json

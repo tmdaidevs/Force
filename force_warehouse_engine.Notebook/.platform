@@ -2,10 +2,10 @@
   "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
   "metadata": {
     "type": "Notebook",
-    "displayName": "force_lakehouse_engine"
+    "displayName": "force_warehouse_engine"
   },
   "config": {
     "version": "2.0",
-    "logicalId": "79781e8e-39fe-8b7f-42f7-6be52e1930ad"
+    "logicalId": "bf523aa1-ac7f-b287-48ce-68a73ddb10cf"
   }
 }

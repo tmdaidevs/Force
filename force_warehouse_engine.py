@@ -7,7 +7,16 @@
 
 import subprocess
 import sys
-subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "polars", "deltalake", "-q"])
+
+# Install required packages if not available
+try:
+    import sempy_labs
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "-q"])
+try:
+    import polars
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "polars", "deltalake", "-q"])
 
 import pandas as pd
 import json
@@ -15,6 +24,9 @@ import notebookutils
 import os
 import re
 from datetime import datetime, timezone
+
+# Initialize Fabric authentication context FIRST
+import sempy.fabric as fabric
 import sempy_labs as labs
 import polars as pl
 

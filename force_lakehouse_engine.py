@@ -7,8 +7,23 @@
 
 import subprocess
 import sys
-subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "polars", "deltalake", "duckdb", "-q"])
 
+# Install required packages if not available
+try:
+    import sempy_labs
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "-q"])
+try:
+    import polars
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "polars", "deltalake", "-q"])
+try:
+    import duckdb
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "duckdb", "-q"])
+
+# Initialize Fabric authentication context FIRST
+import sempy.fabric as fabric
 import sempy_labs as labs
 import pandas as pd
 import notebookutils

@@ -1,0 +1,8 @@
+# These packages are pre-installed in Microsoft Fabric Notebooks.
+# This file is provided for reference only.
+# Note: 'notebookutils' is a Fabric built-in module and cannot be installed via pip.
+pandas
+polars
+duckdb
+fsspec
+sempy-labs

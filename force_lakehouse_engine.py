@@ -137,98 +137,43 @@ def process_all_workspaces(labs, workspace_filter=None):
     # Create DataFrame
     return pd.DataFrame(all_workspace_items)
 
-def get_lakehouse_schemas(lakehouse_df):
-    """Get schemas from each Lakehouse."""
-    all_schemas = []
-    
-    for _, lakehouse in lakehouse_df.iterrows():
-        lakehouse_id = lakehouse['id']
-        workspace_id = lakehouse['workspace_id']
-        lakehouse_name = lakehouse['name']
-        workspace_name = lakehouse['workspace_name']
-        connection_type = 'Lakehouse'
-        
-        try:
-            # Connect to Lakehouse
-            conn = notebookutils.data.connect_to_artifact(lakehouse_id, workspace_id, connection_type)
-            schemas_df = conn.query("SELECT * FROM sys.schemas;")
-            
-            if schemas_df is not None and len(schemas_df) > 0:
-                # Add information
-                schemas_df['lakehouse_id'] = lakehouse_id
-                schemas_df['lakehouse_name'] = lakehouse_name
-                schemas_df['workspace_id'] = workspace_id
-                schemas_df['workspace_name'] = workspace_name
-                schemas_df['item_type'] = 'Lakehouse'
-                schemas_df['connection_type'] = connection_type
-                
-                all_schemas.append(schemas_df)
-                
-        except Exception as e:
-            print(f"Warning: Could not get schemas for lakehouse '{lakehouse_name}' in '{workspace_name}': {e}")
-
-    return pd.concat(all_schemas, ignore_index=True) if all_schemas else pd.DataFrame()
-
-def get_tables_by_schema(lakehouse_df, schemas_df):
-    """Get tables for each schema in each Lakehouse."""
+def discover_lakehouse_tables(lakehouse_df):
+    """Discover tables in each Lakehouse by listing the /Tables/ directory via OneLake."""
+    fs = get_onelake_filesystem()
     all_tables = []
     
-    # Group schemas by lakehouse
-    schema_groups = schemas_df.groupby(['lakehouse_id', 'workspace_id'])
-    
-    for (lakehouse_id, workspace_id), group in schema_groups:
+    for _, lakehouse in lakehouse_df.iterrows():
+        workspace_name = lakehouse['workspace_name']
+        workspace_id = lakehouse['workspace_id']
+        lakehouse_name = lakehouse['name']
+        lakehouse_id = lakehouse['id']
+        
+        tables_path = f"{workspace_name}/{lakehouse_name}.Lakehouse/Tables"
+        
         try:
-            # Get metadata including extended properties
-            lakehouse_info = lakehouse_df[lakehouse_df['id'] == lakehouse_id].iloc[0]
-            lakehouse_name = lakehouse_info['name']
-            workspace_name = lakehouse_info['workspace_name']
-            connection_type = 'Lakehouse'
-            
-            # Connect to Lakehouse
-            conn = notebookutils.data.connect_to_artifact(lakehouse_id, workspace_id, connection_type)
-            
-            for _, schema_row in group.iterrows():
-                schema_name = schema_row['name']
-                schema_id = schema_row['schema_id']
-                
-                try:
-                    query = f"""
-                    SELECT 
-                        t.*, 
-                        '{schema_name}' as schema_name,
-                        '{lakehouse_id}' as lakehouse_id,
-                        '{lakehouse_name}' as lakehouse_name,
-                        '{workspace_id}' as workspace_id,
-                        '{workspace_name}' as workspace_name,
-                        'Lakehouse' as item_type,
-                        'Lakehouse' as connection_type
-                    FROM 
-                        sys.tables t
-                    WHERE 
-                        schema_id = {schema_id}
-                    """
+            items = fs.ls(tables_path)
+            for item in items:
+                # Each item is a table directory
+                if fs.isdir(item):
+                    table_name = item.split('/')[-1]
+                    # Skip hidden/system directories
+                    if table_name.startswith('_') or table_name.startswith('.'):
+                        continue
                     
-                    tables_df = conn.query(query)
+                    table_path = f"abfss://{workspace_name}@onelake.dfs.fabric.microsoft.com/{lakehouse_name}.Lakehouse/Tables/{table_name}"
                     
-                    if tables_df is not None and len(tables_df) > 0:
-                        # Add extended properties from lakehouse to each table
-                        for column in lakehouse_info.index:
-                            # Only add extended properties columns
-                            if column.startswith('ext_'):
-                                tables_df[column] = lakehouse_info[column]
-                        
-                        all_tables.append(tables_df)
-                        
-                except Exception as e:
-                    print(f"Warning: Could not get tables for schema '{schema_name}' in '{lakehouse_name}': {e}")
-
+                    all_tables.append({
+                        'workspace_id': workspace_id,
+                        'workspace_name': workspace_name,
+                        'lakehouse_id': lakehouse_id,
+                        'lakehouse_name': lakehouse_name,
+                        'name': table_name,
+                        'table_path': table_path
+                    })
         except Exception as e:
-            print(f"Warning: Could not connect to lakehouse '{lakehouse_id}': {e}")
+            print(f"  Warning: Could not list tables for '{lakehouse_name}' in '{workspace_name}': {e}")
     
-    if all_tables:
-        return pd.concat(all_tables, ignore_index=True)
-    else:
-        return pd.DataFrame()
+    return pd.DataFrame(all_tables) if all_tables else pd.DataFrame()
 
 def flatten_json_columns(df, json_columns=None):
     """
@@ -677,20 +622,12 @@ def main():
         print("No lakehouses found. Check permissions and workspace filter.")
         return
 
-    print(f"Found {len(lakehouses)} lakehouse(s). Fetching schemas...")
-    lakehouse_schemas = get_lakehouse_schemas(lakehouses)
+    print(f"Found {len(lakehouses)} lakehouse(s). Discovering tables via OneLake...")
+    tables_with_paths = discover_lakehouse_tables(lakehouses)
 
-    if lakehouse_schemas.empty:
-        print("No schemas found in any lakehouse.")
+    if tables_with_paths.empty:
+        print("No tables found in any lakehouse.")
         return
-
-    tables_by_schema = get_tables_by_schema(lakehouses, lakehouse_schemas)
-
-    # Flatten any JSON-formatted columns only if we have tables
-    flattened_tables = flatten_json_columns(tables_by_schema) if not tables_by_schema.empty else pd.DataFrame()
-
-    # Generate table paths for all tables
-    tables_with_paths = generate_table_paths(flattened_tables)
 
     # Execute rule analysis if we have tables with paths
     if tables_with_paths.empty or 'table_path' not in tables_with_paths.columns:

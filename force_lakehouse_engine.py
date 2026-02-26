@@ -25,6 +25,7 @@ import pandas as pd
 import notebookutils
 import json
 import fsspec
+import os
 import re
 import io
 from contextlib import redirect_stdout
@@ -365,21 +366,49 @@ def process_delta_log(actions, version, filename):
 # Function to get parquet metadata using DuckDB
 def get_parquet_metadata(table_path):
     """
-    Get parquet metadata for a table using DuckDB
+    Get parquet metadata for a table using DuckDB via local file download.
     
     Args:
-        table_path: Path to the parquet files
+        table_path: Path to the parquet files (abfss:// path)
         
     Returns:
         DataFrame with parquet metadata
     """
     try:
-        # Create a parquet_metadata query
-        query = f"SELECT * FROM parquet_metadata('{table_path}/*.parquet')"
+        fs = get_onelake_filesystem()
+        # Strip abfss:// prefix for fsspec
+        clean_path = table_path.replace("abfss://", "").replace("@onelake.dfs.fabric.microsoft.com", "")
         
-        # Execute query using duckdb
-        metadata_df = duckdb.query(query).df()
-        return metadata_df
+        # List parquet files
+        all_files = fs.ls(clean_path)
+        parquet_files = [f for f in all_files if f.endswith('.parquet')]
+        
+        if not parquet_files:
+            return pd.DataFrame()
+        
+        # Read first few parquet files metadata (limit to avoid timeout)
+        all_metadata = []
+        for pf in parquet_files[:5]:
+            try:
+                with fs.open(pf, 'rb') as f:
+                    local_bytes = f.read()
+                
+                # Write to temp file for DuckDB
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False) as tmp:
+                    tmp.write(local_bytes)
+                    tmp_path = tmp.name
+                
+                query = f"SELECT * FROM parquet_metadata('{tmp_path}')"
+                meta_df = duckdb.query(query).df()
+                meta_df['file_name'] = pf.split('/')[-1]
+                all_metadata.append(meta_df)
+                
+                os.unlink(tmp_path)
+            except Exception:
+                continue
+        
+        return pd.concat(all_metadata, ignore_index=True) if all_metadata else pd.DataFrame()
     except Exception as e:
         print(f"Warning: Could not read parquet metadata from '{table_path}': {e}")
         return pd.DataFrame()

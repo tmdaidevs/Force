@@ -44,7 +44,7 @@
       "status": "true",
       "severity": 3,
       "content": "query",
-      "level": "database"
+      "level": "schema"
     },
     {
       "id": "RL005",
@@ -55,7 +55,7 @@
       "status": "true",
       "severity": 3,
       "content": "query",
-      "level": "database"
+      "level": "schema"
     },
     {
       "id": "RL006",
@@ -625,7 +625,7 @@
       "status": "true",
       "severity": 2,
       "content": "query",
-      "level": "database"
+      "level": "schema"
     },
     {
       "id": "RL039",
@@ -647,7 +647,7 @@
       "status": "true",
       "severity": 3,
       "content": "query",
-      "level": "database"
+      "level": "schema"
     },
     {
       "id": "RL041",
@@ -680,7 +680,7 @@
       "status": "true",
       "severity": 3,
       "content": "query",
-      "level": "database"
+      "level": "schema"
     }
   ]
 }

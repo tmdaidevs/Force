@@ -131,12 +131,23 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, sche
         schema_name = parts[0]
         table_name = parts[1]
     
-    # Ensure no NULLs - use N/A consistently for empty values
-    if not schema_name:
+    # Hierarchical consistency: ensure parent levels are filled when child levels exist
+    # Column filled → table must be filled
+    # Table filled → schema must be filled  
+    # Schema filled → warehouse is always filled (passed as parameter)
+    rule_level = rule.get("level", "database")
+    
+    if column_name and (not table_name or str(table_name) in ('N/A', 'None', '')):
+        table_name = "N/A"  # Flag: column exists but table unknown
+    if table_name and str(table_name) not in ('N/A', 'None', '') and (not schema_name or str(schema_name) in ('N/A', 'None', '')):
+        schema_name = "dbo"  # Default schema when table is known
+    
+    # Fill N/A for truly empty values
+    if not schema_name or str(schema_name) in ('None', ''):
         schema_name = "N/A"
-    if not table_name:
+    if not table_name or str(table_name) in ('None', ''):
         table_name = "N/A"
-    if not column_name:
+    if not column_name or str(column_name) in ('None', ''):
         column_name = "N/A"
     
     finding_data = {

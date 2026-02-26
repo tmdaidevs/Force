@@ -139,7 +139,8 @@ def process_all_workspaces(labs, workspace_filter=None):
     return pd.DataFrame(all_workspace_items)
 
 def discover_lakehouse_tables(lakehouse_df):
-    """Discover tables in each Lakehouse by listing the /Tables/ directory via OneLake."""
+    """Discover tables in each Lakehouse by listing the /Tables/ directory via OneLake.
+    Supports both flat layout (Tables/MyTable) and schema layout (Tables/dbo/MyTable)."""
     fs = get_onelake_filesystem()
     all_tables = []
     
@@ -154,39 +155,78 @@ def discover_lakehouse_tables(lakehouse_df):
         try:
             items = fs.ls(tables_path, detail=True)
             for item in items:
-                # Get the path and check if it's a directory (table)
                 item_path = item.get('name', item) if isinstance(item, dict) else item
                 item_type = item.get('type', '') if isinstance(item, dict) else ''
                 
-                table_name = str(item_path).split('/')[-1]
+                entry_name = str(item_path).split('/')[-1]
                 
                 # Skip hidden/system directories and files
-                if table_name.startswith('_') or table_name.startswith('.'):
+                if entry_name.startswith('_') or entry_name.startswith('.'):
                     continue
                 # Skip files (parquet etc at root level)
-                if '.' in table_name and not item_type == 'directory':
+                if '.' in entry_name and not item_type == 'directory':
                     continue
                 
-                # Check if it has a _delta_log (confirms it's a Delta table)
+                # Check if this entry is a Delta table (has _delta_log)
+                is_delta = False
                 try:
-                    delta_check = f"{item_path}/_delta_log"
-                    fs.ls(delta_check)
+                    fs.ls(f"{item_path}/_delta_log")
                     is_delta = True
                 except Exception:
-                    is_delta = False
+                    pass
                 
-                if is_delta or item_type == 'directory':
-                    table_path = f"abfss://{workspace_name}@onelake.dfs.fabric.microsoft.com/{lakehouse_name}.Lakehouse/Tables/{table_name}"
-                    
+                if is_delta:
+                    # Direct table under Tables/ (no schema or default schema)
+                    table_path = f"abfss://{workspace_name}@onelake.dfs.fabric.microsoft.com/{lakehouse_name}.Lakehouse/Tables/{entry_name}"
                     all_tables.append({
                         'workspace_id': workspace_id,
                         'workspace_name': workspace_name,
                         'lakehouse_id': lakehouse_id,
                         'lakehouse_name': lakehouse_name,
-                        'name': table_name,
+                        'schema_name': 'dbo',
+                        'name': entry_name,
                         'table_path': table_path
                     })
-                    print(f"    Found table: {lakehouse_name}/{table_name}")
+                    print(f"    Found table: {lakehouse_name}/dbo.{entry_name}")
+                elif item_type == 'directory':
+                    # This might be a schema folder – check for sub-tables
+                    schema_name = entry_name
+                    try:
+                        sub_items = fs.ls(item_path, detail=True)
+                        found_sub_table = False
+                        for sub_item in sub_items:
+                            sub_path = sub_item.get('name', sub_item) if isinstance(sub_item, dict) else sub_item
+                            sub_type = sub_item.get('type', '') if isinstance(sub_item, dict) else ''
+                            sub_name = str(sub_path).split('/')[-1]
+                            
+                            if sub_name.startswith('_') or sub_name.startswith('.'):
+                                continue
+                            if '.' in sub_name and sub_type != 'directory':
+                                continue
+                            
+                            # Check if sub-entry is a Delta table
+                            try:
+                                fs.ls(f"{sub_path}/_delta_log")
+                                table_path = f"abfss://{workspace_name}@onelake.dfs.fabric.microsoft.com/{lakehouse_name}.Lakehouse/Tables/{schema_name}/{sub_name}"
+                                all_tables.append({
+                                    'workspace_id': workspace_id,
+                                    'workspace_name': workspace_name,
+                                    'lakehouse_id': lakehouse_id,
+                                    'lakehouse_name': lakehouse_name,
+                                    'schema_name': schema_name,
+                                    'name': sub_name,
+                                    'table_path': table_path
+                                })
+                                found_sub_table = True
+                                print(f"    Found table: {lakehouse_name}/{schema_name}.{sub_name}")
+                            except Exception:
+                                pass
+                        
+                        if not found_sub_table:
+                            # Directory without Delta tables – might be empty schema or non-table dir
+                            pass
+                    except Exception:
+                        pass
         except Exception as e:
             error_msg = str(e)
             if 'Forbidden' in error_msg or 'Unauthorized' in error_msg:
@@ -548,7 +588,7 @@ def analyze_rule(rule, df_all, parquet_metadata_df=None):
         return "", None
 
 # Function to analyze rules for a specific table
-def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lakehouse_id=None):
+def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lakehouse_id=None, schema_name='dbo'):
     """
     Analyzes all rules for a specific table path
     
@@ -557,6 +597,7 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
         workspace_id: The ID of the workspace containing the table
         workspace_name: The name of the workspace containing the table
         lakehouse_id: The ID of the lakehouse containing the table
+        schema_name: The schema name (default: 'dbo')
         
     Returns:
         DataFrame with rule analysis results
@@ -636,20 +677,28 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
                     "{full_table_name}", f"{lh_info.get('lakehouse_name', '')}.{lh_info.get('table_name', '')}"
                 )
         
-        # Add result with single result column
+        # Skip empty results (rule returned nothing to check)
+        if not rule_result or (isinstance(rule_result, str) and rule_result.strip() == ''):
+            continue
+        
+        # Add result with standardized column names (matching warehouse engine)
         result = {
             'rule_id': rule_id,
             'category': category,
             'description': description,
             'recommendation': recommendation,
             'severity': severity,
+            'content': rule.get("content", "analysis"),
             'level': level,
-            'table_name': lh_info['table_name'],
-            'lakehouse_name': lh_info['lakehouse_name'],
-            'lakehouse_id': lakehouse_id,
             'workspace_id': workspace_id,
             'workspace_name': workspace_name,
-            'rule_result': rule_result.strip() if isinstance(rule_result, str) else rule_result,
+            'lakehouse_name': lh_info['lakehouse_name'],
+            'lakehouse_id': lakehouse_id,
+            'schema_name': schema_name,
+            'table_name': lh_info['table_name'],
+            'column_name': 'N/A',
+            'result': rule_result.strip() if isinstance(rule_result, str) else rule_result,
+            'scan_date': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             'remediation_script': remediation_script
         }
         rules_results.append(result)
@@ -698,9 +747,10 @@ def main():
         workspace_id = row['workspace_id']
         workspace_name = row['workspace_name']
         lakehouse_id = row['lakehouse_id']
+        schema_name = row.get('schema_name', 'dbo')
         table_name = row.get('name', 'unknown')
 
-        print(f"  [{idx}/{total_tables}] Analyzing {workspace_name}/{table_name}...")
+        print(f"  [{idx}/{total_tables}] Analyzing {workspace_name}/{schema_name}.{table_name}...")
 
         try:
             # Run rule analysis for this table with workspace and lakehouse info
@@ -708,7 +758,8 @@ def main():
                 table_path,
                 workspace_id=workspace_id,
                 workspace_name=workspace_name,
-                lakehouse_id=lakehouse_id
+                lakehouse_id=lakehouse_id,
+                schema_name=schema_name
             )
 
             if not rule_results.empty:
@@ -722,9 +773,12 @@ def main():
     if all_rule_results:
         combined_results = pd.concat(all_rule_results, ignore_index=True)
 
-        # Add timestamp for when the analysis was performed - use ISO 8601 format with UTC timezone
-        now_utc = datetime.now(timezone.utc)
-        combined_results['analysis_timestamp'] = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        # Optimize column order (matching warehouse engine)
+        priority_cols = ['rule_id', 'level', 'workspace_name', 'workspace_id',
+                         'lakehouse_name', 'schema_name', 'table_name', 'column_name']
+        existing_priority = [c for c in priority_cols if c in combined_results.columns]
+        remaining = [c for c in combined_results.columns if c not in priority_cols]
+        combined_results = combined_results[existing_priority + remaining]
 
         # Display results for notebook view
         display(combined_results)

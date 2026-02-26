@@ -121,10 +121,16 @@ def load_json_with_comments(file_path):
     except json.JSONDecodeError as e:
         raise json.JSONDecodeError(f"Error parsing JSON: {e}", e.doc, e.pos)
 
-def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, table_name=None, 
+def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, schema_name=None, table_name=None, 
                        column_name=None, result="", scan_timestamp=None, extra_data=None,
                        remediation_script=None):
     """Helper function to create a standardized finding data dictionary."""
+    # Extract schema from table_name if it contains 'schema.table' format
+    if table_name and '.' in str(table_name) and not schema_name:
+        parts = str(table_name).split('.', 1)
+        schema_name = parts[0]
+        table_name = parts[1]
+    
     finding_data = {
         "rule_id": rule.get("id"),
         "category": rule.get("category"),
@@ -135,6 +141,7 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, tabl
         "workspace_id": workspace_id,
         "workspace_name": workspace_name,
         "warehouse_name": warehouse_name,
+        "schema_name": schema_name,
         "table_name": table_name,
         "column_name": column_name,
         "result": result,
@@ -403,7 +410,7 @@ def analyze_all_warehouses(rules_file_path, labs, workspace_filter=None):
         # Get existing columns and compute priority columns in one pass
         cols = set(all_findings_df.columns)
         priority_cols = ['rule_id', 'level', 'workspace_name', 'workspace_id', 
-                         'warehouse_name', 'table_name', 'column_name']
+                         'warehouse_name', 'schema_name', 'table_name', 'column_name']
         
         # Use list comprehension for efficiency
         existing_priority_cols = [col for col in priority_cols if col in cols]

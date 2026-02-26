@@ -89,13 +89,13 @@
       "status": "true",
       "severity": 3,
       "content": "query",
-      "level": "schema"
+      "level": "table"
     },
     {
       "id": "RL009",
       "category": "Data Quality",
       "description": "Ensure every table that needs unique rows has a primary key or unique constraint (not enforced).",
-      "sql_query": "DECLARE @has_issue BIT = 0;\n\nIF EXISTS (\n  SELECT 1\n  FROM sys.tables t\n  LEFT JOIN sys.indexes i ON t.object_id=i.object_id AND i.is_primary_key=1\n  WHERE i.object_id IS NULL AND t.is_ms_shipped=0\n)\nBEGIN\n  SET @has_issue = 1;\n  SELECT\n    SCHEMA_NAME(t.schema_id) + '.' + t.name AS table_name,\n    NULL        AS column_name,\n    'Table ' + t.name + ' is missing a primary key or unique constraint. Without one, duplicate rows cannot be prevented, harming data integrity.' + CHAR(10)+CHAR(10)+'Indicator: Anomaly - ERR_1001' AS result\n  FROM sys.tables t\n  LEFT JOIN sys.indexes i ON t.object_id=i.object_id AND i.is_primary_key=1\n  WHERE i.object_id IS NULL AND t.is_ms_shipped=0;\nEND\nELSE\nBEGIN\n  SELECT\n    NULL AS table_name,\n    NULL AS column_name,\n    'All user tables have a primary key or unique constraint. This ensures each row is uniquely identifiable and prevents duplicates.' + CHAR(10)+CHAR(10)+'Indicator: Optimized - OPT_2001' AS result;\nEND",
+      "sql_query": "DECLARE @has_issue BIT = 0;\n\nIF EXISTS (\n  SELECT 1\n  FROM sys.tables t\n  LEFT JOIN sys.indexes i ON t.object_id=i.object_id AND i.is_primary_key=1\n  WHERE i.object_id IS NULL AND t.is_ms_shipped=0\n)\nBEGIN\n  SET @has_issue = 1;\n  SELECT\n    SCHEMA_NAME(t.schema_id) + '.' + t.name AS table_name,\n    NULL        AS column_name,\n    'Table ' + t.name + ' is missing a primary key or unique constraint. Without one, duplicate rows cannot be prevented, harming data integrity.' + CHAR(10)+CHAR(10)+'Indicator: Anomaly - ERR_1001' AS result\n  FROM sys.tables t\n  LEFT JOIN sys.indexes i ON t.object_id=i.object_id AND i.is_primary_key=1\n  WHERE i.object_id IS NULL AND t.is_ms_shipped=0;\nEND\nELSE\nBEGIN\n  SELECT\n    SCHEMA_NAME(t.schema_id) + '.' + t.name AS table_name,\n    NULL AS column_name,\n    'Table ' + t.name + ' has a primary key or unique constraint. Each row is uniquely identifiable.' + CHAR(10)+CHAR(10)+'Indicator: Optimized - OPT_2001' AS result\n  FROM sys.tables t\n  JOIN sys.indexes i ON t.object_id=i.object_id AND i.is_primary_key=1\n  WHERE t.is_ms_shipped=0;\nEND",
       "recommendation": "Define a primary key or unique constraint on tables that require row uniqueness to enforce data integrity and improve performance of joins.",
       "status": "true",
       "severity": 1,

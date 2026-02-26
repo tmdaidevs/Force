@@ -121,7 +121,7 @@ def load_json_with_comments(file_path):
     except json.JSONDecodeError as e:
         raise json.JSONDecodeError(f"Error parsing JSON: {e}", e.doc, e.pos)
 
-def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, schema_name=None, table_name=None, 
+def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, warehouse_id=None, schema_name=None, table_name=None, 
                        column_name=None, result="", scan_timestamp=None, extra_data=None,
                        remediation_script=None):
     """Helper function to create a standardized finding data dictionary."""
@@ -165,6 +165,7 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, sche
         "workspace_id": workspace_id,
         "workspace_name": workspace_name,
         "warehouse_name": warehouse_name,
+        "warehouse_id": warehouse_id or "N/A",
         "schema_name": schema_name,
         "table_name": table_name,
         "column_name": column_name,
@@ -180,7 +181,7 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, sche
         
     return finding_data
 
-def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_name):
+def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_name, warehouse_id=None):
     """Analyze a specific warehouse using the rules defined in the JSON file."""
     scan_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     
@@ -263,6 +264,7 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
                                     workspace_id, 
                                     workspace_name, 
                                     warehouse_name,
+                                    warehouse_id=warehouse_id,
                                     table_name=row.get("table_name") if "table_name" in query_results.columns else None,
                                     column_name=row.get("column_name") if "column_name" in query_results.columns else None,
                                     result=row.get("result") if "result" in query_results.columns else "Finding detected",
@@ -277,13 +279,13 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
                     # Record error as finding
                     all_findings.append(create_finding_data(
                         rule, workspace_id, workspace_name, warehouse_name,
-                        result=f"Error executing query: {str(e)}", scan_timestamp=scan_timestamp
+                        warehouse_id=warehouse_id, result=f"Error executing query: {str(e)}", scan_timestamp=scan_timestamp
                     ))
             else:
                 # For general rules (non-queries), add a placeholder entry
                 all_findings.append(create_finding_data(
                     rule, workspace_id, workspace_name, warehouse_name,
-                    result="General guidance - no query executed", scan_timestamp=scan_timestamp
+                    warehouse_id=warehouse_id, result="General guidance - no query executed", scan_timestamp=scan_timestamp
                 ))
                 
     except Exception as e:
@@ -304,7 +306,7 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
         
         all_findings.append(create_finding_data(
             connection_error_rule, workspace_id, workspace_name, warehouse_name,
-            result=f"Connection error: {error_message}", scan_timestamp=scan_timestamp
+            warehouse_id=warehouse_id, result=f"Connection error: {error_message}", scan_timestamp=scan_timestamp
         ))
     
     # Create DataFrame from findings more efficiently
@@ -406,12 +408,13 @@ def analyze_all_warehouses(rules_file_path, labs, workspace_filter=None):
         workspace_id = row['workspace_id']
         workspace_name = row['workspace_name']
         warehouse_name = row['name'] if 'name' in row else row.get('displayName', f"Warehouse_{index}")
+        warehouse_id = row.get('id', None)
         
         print(f"\nProcessing warehouse {warehouse_name} in workspace {workspace_name} ({workspace_id})...")
         
         try:
             # Analyze this warehouse
-            findings_df = analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_name)
+            findings_df = analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_name, warehouse_id=warehouse_id)
             
             # Add to findings if not empty (avoid unnecessary operations)
             if not findings_df.empty:
@@ -431,7 +434,7 @@ def analyze_all_warehouses(rules_file_path, labs, workspace_filter=None):
         # Get existing columns and compute priority columns in one pass
         cols = set(all_findings_df.columns)
         priority_cols = ['rule_id', 'level', 'workspace_name', 'workspace_id', 
-                         'warehouse_name', 'schema_name', 'table_name', 'column_name']
+                         'warehouse_name', 'warehouse_id', 'schema_name', 'table_name', 'column_name']
         
         # Use list comprehension for efficiency
         existing_priority_cols = [col for col in priority_cols if col in cols]

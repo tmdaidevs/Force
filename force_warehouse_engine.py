@@ -125,17 +125,22 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, sche
                        column_name=None, result="", scan_timestamp=None, extra_data=None,
                        remediation_script=None):
     """Helper function to create a standardized finding data dictionary."""
+    rule_level = rule.get("level", "database")
+    
     # Extract schema from table_name if it contains 'schema.table' format
     if table_name and '.' in str(table_name) and not schema_name:
         parts = str(table_name).split('.', 1)
         schema_name = parts[0]
         table_name = parts[1]
+    # For schema-level rules: if table_name has no dot, treat it as schema_name
+    elif table_name and '.' not in str(table_name) and not schema_name and rule_level == 'schema':
+        schema_name = str(table_name)
+        table_name = None
     
     # Hierarchical consistency: ensure parent levels are filled when child levels exist
     # Column filled → table must be filled
     # Table filled → schema must be filled  
     # Schema filled → warehouse is always filled (passed as parameter)
-    rule_level = rule.get("level", "database")
     
     if column_name and (not table_name or str(table_name) in ('N/A', 'None', '')):
         table_name = "N/A"  # Flag: column exists but table unknown

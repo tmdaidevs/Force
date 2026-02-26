@@ -14,10 +14,6 @@ try:
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "semantic-link-labs", "-q"])
 try:
-    import polars
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "polars", "deltalake", "-q"])
-try:
     import duckdb
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "duckdb", "-q"])
@@ -34,7 +30,6 @@ import io
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 import duckdb
-import polars as pl
 
 # ============================================================
 # CONFIGURATION - Edit this section before running
@@ -341,6 +336,25 @@ def generate_table_paths(flattened_tables):
 # Function to load lakehouse rules from the JSON file
 def load_lakehouse_rules():
     rules_path = RULES_FILE_PATH
+    # Try as-is first
+    if os.path.exists(rules_path):
+        pass
+    else:
+        # Try notebook resources path
+        try:
+            nb_res = notebookutils.nbResPath
+            candidate = os.path.join(nb_res, rules_path)
+            if os.path.exists(candidate):
+                rules_path = candidate
+        except Exception:
+            pass
+        # Try common Fabric paths
+        if not os.path.exists(rules_path):
+            for prefix in ["/lakehouse/default/Files", "/home/trusted-service-user/work", "."]:
+                candidate = os.path.join(prefix, rules_path)
+                if os.path.exists(candidate):
+                    rules_path = candidate
+                    break
     try:
         with open(rules_path, "r") as f:
             rules_data = json.load(f)
@@ -523,6 +537,10 @@ def analyze_rule(rule, df_all, parquet_metadata_df=None):
             
             if not output:
                 return "", None
+            
+            # If output has no Indicator, add one
+            if 'Indicator:' not in output:
+                output = output + '\n\nIndicator: Optimized - OPT_2001'
             
             # Check if the rule dynamically set a remediation_script
             dynamic_remediation = exec_globals.get('_remediation_script', None)
@@ -729,37 +747,17 @@ def main():
         target_table = OUTPUT_TABLE_NAME
         target_table_history = OUTPUT_TABLE_HISTORY_NAME
 
-        # Convert to polars DataFrame
-        findings_polars = pl.from_pandas(combined_results)
-
-        # Convert analysis_timestamp from string to datetime in polars DataFrame
-        if 'analysis_timestamp' in findings_polars.columns:
-            findings_polars = findings_polars.with_columns(
-                pl.col('analysis_timestamp').str.to_datetime(format='%Y-%m-%dT%H:%M:%S%.fZ', time_zone='UTC')
-            )
-
         try:
-            # Get Fabric storage token for OneLake authentication
-            storage_options = {
-                "bearer_token": notebookutils.credentials.getToken('storage'),
-                "use_fabric_endpoint": "true"
-            }
+            # Convert pandas to Spark DataFrame and write as Delta (avoids polars auth issues)
+            spark_df = spark.createDataFrame(combined_results.astype(str))
 
-            # Always use overwrite mode for the main table
-            findings_polars.write_delta(
-                f"{target_lakehouse}/Tables/{target_table}",
-                mode="overwrite",
-                storage_options=storage_options
-            )
+            # Overwrite the main table (latest results)
+            spark_df.write.format("delta").mode("overwrite").save(f"{target_lakehouse}/Tables/{target_table}")
             print(f"Analysis results successfully written to {target_lakehouse}/Tables/{target_table} using overwrite mode")
 
-            # Always use append mode for the history table
-            findings_polars.write_delta(
-                f"{target_lakehouse}/Tables/{target_table_history}",
-                mode="append",
-                storage_options=storage_options
-            )
-            print(f"Analysis results successfully written to {target_lakehouse}/Tables/{target_table_history} using append mode")
+            # Append to the history table (for trending)
+            spark_df.write.format("delta").mode("append").save(f"{target_lakehouse}/Tables/{target_table_history}")
+            print(f"Analysis results successfully appended to {target_lakehouse}/Tables/{target_table_history}")
 
         except Exception as e:
             print(f"Error writing to tables: {str(e)}")

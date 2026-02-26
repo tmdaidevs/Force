@@ -49,6 +49,7 @@ RULES_FILE_PATH = "./builtin/force_warehouse_rules.json"
 
 # Output table name in the target Lakehouse.
 OUTPUT_TABLE_NAME = "force_warehouse_analysis"
+OUTPUT_TABLE_HISTORY_NAME = "force_warehouse_analysis_history"
 
 # ============================================================
 # END CONFIGURATION
@@ -438,12 +439,19 @@ def main():
 
     # Build target Lakehouse path from configuration
     target_table_path = f"abfss://{TARGET_WORKSPACE_NAME}@onelake.dfs.fabric.microsoft.com/{TARGET_LAKEHOUSE_NAME}.Lakehouse/Tables/{OUTPUT_TABLE_NAME}"
+    target_history_path = f"abfss://{TARGET_WORKSPACE_NAME}@onelake.dfs.fabric.microsoft.com/{TARGET_LAKEHOUSE_NAME}.Lakehouse/Tables/{OUTPUT_TABLE_HISTORY_NAME}"
 
     try:
         # Convert pandas to Spark DataFrame and write as Delta
         spark_df = spark.createDataFrame(all_findings_df.astype(str))
+
+        # Overwrite the main table (latest results)
         spark_df.write.format("delta").mode("overwrite").save(target_table_path)
         print(f"Successfully wrote {len(all_findings_df)} findings to {target_table_path}")
+
+        # Append to the history table (for trending)
+        spark_df.write.format("delta").mode("append").save(target_history_path)
+        print(f"Successfully appended {len(all_findings_df)} findings to {target_history_path}")
     except Exception as e:
         print(f"Error writing to Delta table: {str(e)}")
 

@@ -681,6 +681,28 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
         if not rule_result or (isinstance(rule_result, str) and rule_result.strip() == ''):
             continue
         
+        # Apply hierarchical level logic (like warehouse engine):
+        # database/lakehouse level: only lakehouse_name, rest N/A
+        # schema level: schema_name filled, table/column N/A
+        # table level: table_name filled, column N/A
+        # column level: table_name + column_name filled
+        if level in ('lakehouse', 'database'):
+            out_schema = 'N/A'
+            out_table = 'N/A'
+            out_column = 'N/A'
+        elif level == 'schema':
+            out_schema = schema_name
+            out_table = 'N/A'
+            out_column = 'N/A'
+        elif level == 'column':
+            out_schema = schema_name
+            out_table = lh_info['table_name']
+            out_column = 'N/A'  # Default; rules put column details in result text
+        else:  # table level (default)
+            out_schema = schema_name
+            out_table = lh_info['table_name']
+            out_column = 'N/A'
+        
         # Add result with standardized column names (matching warehouse engine)
         result = {
             'rule_id': rule_id,
@@ -694,9 +716,9 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
             'workspace_name': workspace_name,
             'lakehouse_name': lh_info['lakehouse_name'],
             'lakehouse_id': lakehouse_id,
-            'schema_name': schema_name,
-            'table_name': lh_info['table_name'],
-            'column_name': 'N/A',
+            'schema_name': out_schema,
+            'table_name': out_table,
+            'column_name': out_column,
             'result': rule_result.strip() if isinstance(rule_result, str) else rule_result,
             'scan_date': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             'remediation_script': remediation_script

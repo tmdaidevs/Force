@@ -239,12 +239,12 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
                                     workspace_id, 
                                     workspace_name, 
                                     warehouse_name,
-                                    row.get("table_name") if "table_name" in query_results.columns else None,
-                                    row.get("column_name") if "column_name" in query_results.columns else None,
-                                    row.get("result") if "result" in query_results.columns else "Finding detected",
-                                    scan_timestamp,
-                                    extra_data,
-                                    remediation
+                                    table_name=row.get("table_name") if "table_name" in query_results.columns else None,
+                                    column_name=row.get("column_name") if "column_name" in query_results.columns else None,
+                                    result=row.get("result") if "result" in query_results.columns else "Finding detected",
+                                    scan_timestamp=scan_timestamp,
+                                    extra_data=extra_data,
+                                    remediation_script=remediation
                                 ))
                         else:
                             # No issues found, add a "clean" entry

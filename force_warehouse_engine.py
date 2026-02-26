@@ -131,22 +131,13 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, sche
         schema_name = parts[0]
         table_name = parts[1]
     
-    # Ensure no NULLs - always show what was checked
-    rule_level = rule.get("level", "database")
+    # Ensure no NULLs - use N/A consistently for empty values
     if not schema_name:
-        schema_name = "N/A" if rule_level == "database" else "dbo"
+        schema_name = "N/A"
     if not table_name:
-        if rule_level == "database":
-            table_name = "(database-level)"
-        elif rule_level == "column":
-            table_name = "(all tables)"
-        else:
-            table_name = "(all tables)"
+        table_name = "N/A"
     if not column_name:
-        if rule_level == "column":
-            column_name = "(all columns)"
-        else:
-            column_name = "N/A"
+        column_name = "N/A"
     
     finding_data = {
         "rule_id": rule.get("id"),

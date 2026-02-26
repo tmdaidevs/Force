@@ -266,11 +266,8 @@ def analyze_warehouse(rules_file_path, warehouse_name, workspace_id, workspace_n
                                     remediation_script=remediation
                                 ))
                         else:
-                            # No issues found, add a "clean" entry
-                            all_findings.append(create_finding_data(
-                                rule, workspace_id, workspace_name, warehouse_name, 
-                                result="No issues found\n\nIndicator: Optimized - OPT_2001", scan_timestamp=scan_timestamp
-                            ))
+                            # Empty result set – rule returned no rows, skip silently
+                            pass
                 except Exception as e:
                     # Record error as finding
                     all_findings.append(create_finding_data(

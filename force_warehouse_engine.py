@@ -354,7 +354,8 @@ def analyze_all_warehouses(rules_file_path, labs, workspace_filter=None):
     # Filter for warehouse items only - do this in one operation for efficiency
     warehouses_df = all_items_df[
         (all_items_df['item_type'] == 'warehouses') & 
-        (all_items_df['name'] != 'DataflowsStagingWarehouse')
+        (all_items_df['name'] != 'DataflowsStagingWarehouse') &
+        (~all_items_df['name'].str.startswith('StagingWarehouseForDataflows_'))
     ].copy()
 
     if workspace_filter:
@@ -433,6 +434,43 @@ def main():
     if all_findings_df.empty:
         print("No findings to write to Delta table.")
         return
+
+    # Extract indicator column from result text
+    def extract_indicator(result_text):
+        if not isinstance(result_text, str):
+            return 'Unknown'
+        if 'Anomaly - ERR_1001' in result_text:
+            return 'Anomaly'
+        elif 'Optimized - OPT_2001' in result_text:
+            return 'Optimized'
+        elif 'Error executing query' in result_text:
+            return 'Error'
+        return 'Unknown'
+    
+    all_findings_df['indicator'] = all_findings_df['result'].apply(extract_indicator)
+
+    # Calculate health score per warehouse (0-100)
+    def calc_health_score(group):
+        total = len(group)
+        if total == 0:
+            return 100
+        anomalies = group[group['indicator'] == 'Anomaly']
+        # Weight by severity: sev 1 = 3 pts, sev 2 = 2 pts, sev 3 = 1 pt
+        weighted_penalty = 0
+        for _, row in anomalies.iterrows():
+            sev = row.get('severity', 3)
+            try:
+                sev = int(sev)
+            except (ValueError, TypeError):
+                sev = 3
+            weighted_penalty += {1: 3, 2: 2, 3: 1}.get(sev, 1)
+        max_penalty = total * 3
+        score = max(0, round(100 * (1 - weighted_penalty / max_penalty)))
+        return score
+    
+    health_scores = all_findings_df.groupby('warehouse_name').apply(calc_health_score).reset_index()
+    health_scores.columns = ['warehouse_name', 'health_score']
+    all_findings_df = all_findings_df.merge(health_scores, on='warehouse_name', how='left')
 
     # Display results for notebook view
     display(all_findings_df)

@@ -131,6 +131,10 @@ def create_finding_data(rule, workspace_id, workspace_name, warehouse_name, sche
         schema_name = parts[0]
         table_name = parts[1]
     
+    # Default schema to 'dbo' if not provided but table_name exists
+    if table_name and not schema_name:
+        schema_name = 'dbo'
+    
     finding_data = {
         "rule_id": rule.get("id"),
         "category": rule.get("category"),

@@ -726,40 +726,6 @@ def main():
         now_utc = datetime.now(timezone.utc)
         combined_results['analysis_timestamp'] = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-        # Extract indicator column from rule_result text
-        def extract_indicator(result_text):
-            if not isinstance(result_text, str):
-                return 'Unknown'
-            if 'Anomaly - ERR_1001' in result_text:
-                return 'Anomaly'
-            elif 'Optimized - OPT_2001' in result_text:
-                return 'Optimized'
-            return 'Unknown'
-        
-        combined_results['indicator'] = combined_results['rule_result'].apply(extract_indicator)
-
-        # Calculate health score per lakehouse (0-100)
-        def calc_health_score(group):
-            total = len(group)
-            if total == 0:
-                return 100
-            anomalies = group[group['indicator'] == 'Anomaly']
-            weighted_penalty = 0
-            for _, row in anomalies.iterrows():
-                sev = row.get('severity', 3)
-                try:
-                    sev = int(sev)
-                except (ValueError, TypeError):
-                    sev = 3
-                weighted_penalty += {1: 3, 2: 2, 3: 1}.get(sev, 1)
-            max_penalty = total * 3
-            score = max(0, round(100 * (1 - weighted_penalty / max_penalty)))
-            return score
-        
-        health_scores = combined_results.groupby('lakehouse_name').apply(calc_health_score).reset_index()
-        health_scores.columns = ['lakehouse_name', 'health_score']
-        combined_results = combined_results.merge(health_scores, on='lakehouse_name', how='left')
-
         # Display results for notebook view
         display(combined_results)
 

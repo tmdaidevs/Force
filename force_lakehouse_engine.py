@@ -152,15 +152,30 @@ def discover_lakehouse_tables(lakehouse_df):
         tables_path = f"{workspace_name}/{lakehouse_name}.Lakehouse/Tables"
         
         try:
-            items = fs.ls(tables_path)
+            items = fs.ls(tables_path, detail=True)
             for item in items:
-                # Each item is a table directory
-                if fs.isdir(item):
-                    table_name = item.split('/')[-1]
-                    # Skip hidden/system directories
-                    if table_name.startswith('_') or table_name.startswith('.'):
-                        continue
-                    
+                # Get the path and check if it's a directory (table)
+                item_path = item.get('name', item) if isinstance(item, dict) else item
+                item_type = item.get('type', '') if isinstance(item, dict) else ''
+                
+                table_name = str(item_path).split('/')[-1]
+                
+                # Skip hidden/system directories and files
+                if table_name.startswith('_') or table_name.startswith('.'):
+                    continue
+                # Skip files (parquet etc at root level)
+                if '.' in table_name and not item_type == 'directory':
+                    continue
+                
+                # Check if it has a _delta_log (confirms it's a Delta table)
+                try:
+                    delta_check = f"{item_path}/_delta_log"
+                    fs.ls(delta_check)
+                    is_delta = True
+                except Exception:
+                    is_delta = False
+                
+                if is_delta or item_type == 'directory':
                     table_path = f"abfss://{workspace_name}@onelake.dfs.fabric.microsoft.com/{lakehouse_name}.Lakehouse/Tables/{table_name}"
                     
                     all_tables.append({
@@ -171,9 +186,15 @@ def discover_lakehouse_tables(lakehouse_df):
                         'name': table_name,
                         'table_path': table_path
                     })
+                    print(f"    Found table: {lakehouse_name}/{table_name}")
         except Exception as e:
-            print(f"  Warning: Could not list tables for '{lakehouse_name}' in '{workspace_name}': {e}")
+            error_msg = str(e)
+            if 'Forbidden' in error_msg or 'Unauthorized' in error_msg:
+                print(f"  Skipping '{lakehouse_name}' in '{workspace_name}' (no access)")
+            else:
+                print(f"  Warning: Could not list tables for '{lakehouse_name}' in '{workspace_name}': {error_msg[:100]}")
     
+    print(f"  Total tables discovered: {len(all_tables)}")
     return pd.DataFrame(all_tables) if all_tables else pd.DataFrame()
 
 def flatten_json_columns(df, json_columns=None):

@@ -495,30 +495,45 @@ def analyze_rule(rule, df_all, parquet_metadata_df=None):
     # Check if it's a DuckDB query
     if duckdb_query and parquet_metadata_df is not None and not parquet_metadata_df.empty:
         try:
-            output_buffer = io.StringIO()
-            with redirect_stdout(output_buffer):
-                try:
-                    # Create a DuckDB connection
-                    con = duckdb.connect(database=':memory:')
-                    
-                    # Register the DataFrame as a table
-                    con.register('df', parquet_metadata_df)
-                    
-                    # Execute the query - get a direct string output rather than DataFrame for cleaner display
+            try:
+                # Create a DuckDB connection
+                con = duckdb.connect(database=':memory:')
+                
+                # Register the DataFrame as a table
+                con.register('df', parquet_metadata_df)
+                
+                # Check if rule has a per-column query (duckdb_column_query)
+                duckdb_col_query = rule.get("duckdb_column_query", "")
+                if duckdb_col_query:
+                    # Execute per-column query: expects rows with column_name, result
+                    rows = con.execute(duckdb_col_query).fetchall()
+                    column_findings = []
+                    for row in rows:
+                        col_name = str(row[0]) if row[0] else 'N/A'
+                        col_result = str(row[1]) if len(row) > 1 and row[1] else ''
+                        if col_result.strip():
+                            column_findings.append({'column_name': col_name, 'result': col_result})
+                    # Also run the regular query for aggregated output
+                    output = ""
+                    try:
+                        result = con.execute(duckdb_query).fetchone()[0]
+                        output = str(result).strip()
+                    except:
+                        pass
+                    return output, None, column_findings if column_findings else None
+                else:
+                    # Standard single-row output
                     result = con.execute(duckdb_query).fetchone()[0]
+                    output = str(result).strip()
+                    return output, None, None
                     
-                    # Print the result directly (redirected to buffer)
-                    print(result)
-                        
-                except Exception:
-                    pass
+            except Exception:
+                pass
             
-            output = output_buffer.getvalue().strip()
-
-            return output, None
+            return "", None, None
             
         except Exception:
-            return f"Error analyzing rule {rule_id} with DuckDB", None
+            return f"Error analyzing rule {rule_id} with DuckDB", None, None
     
     # If not a DuckDB query, use PySpark query
     elif pyspark_query:
@@ -565,13 +580,21 @@ def analyze_rule(rule, df_all, parquet_metadata_df=None):
                     # Check if rule set a remediation_script variable
                     if 'remediation_script' in exec_locals:
                         exec_globals['_remediation_script'] = exec_locals['remediation_script']
+                    # Check if rule set per-column findings
+                    if '_column_findings' in exec_locals:
+                        exec_globals['_column_findings'] = exec_locals['_column_findings']
                 except Exception:
                     pass
             
             output = output_buffer.getvalue().strip()
             
             if not output:
-                return "", None
+                # Check if column findings were set (even without print output)
+                column_findings = exec_globals.get('_column_findings', None)
+                if column_findings:
+                    dynamic_remediation = exec_globals.get('_remediation_script', None)
+                    return "", dynamic_remediation, column_findings
+                return "", None, None
             
             # If output has no Indicator, add one
             if 'Indicator:' not in output:
@@ -579,13 +602,14 @@ def analyze_rule(rule, df_all, parquet_metadata_df=None):
             
             # Check if the rule dynamically set a remediation_script
             dynamic_remediation = exec_globals.get('_remediation_script', None)
+            column_findings = exec_globals.get('_column_findings', None)
                 
-            return output, dynamic_remediation
+            return output, dynamic_remediation, column_findings
         
         except Exception:
-            return f"Error analyzing rule {rule_id}", None
+            return f"Error analyzing rule {rule_id}", None, None
     else:
-        return "", None
+        return "", None, None
 
 # Function to analyze rules for a specific table
 def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lakehouse_id=None, schema_name='dbo'):
@@ -655,10 +679,11 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
             if parquet_metadata_df.empty:
                 rule_result = "Parquet metadata not available for this table"
                 dynamic_remediation = None
+                column_findings = None
             else:
-                rule_result, dynamic_remediation = analyze_rule(rule, df_all, parquet_metadata_df)
+                rule_result, dynamic_remediation, column_findings = analyze_rule(rule, df_all, parquet_metadata_df)
         else:
-            rule_result, dynamic_remediation = analyze_rule(rule, df_all)
+            rule_result, dynamic_remediation, column_findings = analyze_rule(rule, df_all)
         
         # Build remediation script: prefer dynamic (from rule code), fallback to template
         remediation_script = None
@@ -677,6 +702,46 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
                     "{full_table_name}", f"{lh_info.get('lakehouse_name', '')}.{lh_info.get('table_name', '')}"
                 )
         
+        # Handle per-column findings (column-level rules that set _column_findings)
+        if column_findings and level == 'column':
+            scan_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            for cf in column_findings:
+                cf_result = cf.get('result', '')
+                if not cf_result or (isinstance(cf_result, str) and cf_result.strip() == ''):
+                    continue
+                cf_is_anomaly = isinstance(cf_result, str) and "Anomaly - ERR_1001" in cf_result
+                cf_remediation = None
+                if cf_is_anomaly and remediation_template:
+                    cf_remediation = remediation_template.replace(
+                        "{table_name}", lh_info.get('table_name', '')
+                    ).replace(
+                        "{column_name}", cf.get('column_name', '')
+                    ).replace(
+                        "{lakehouse_name}", lh_info.get('lakehouse_name', '')
+                    ).replace(
+                        "{full_table_name}", f"{lh_info.get('lakehouse_name', '')}.{lh_info.get('table_name', '')}"
+                    )
+                rules_results.append({
+                    'rule_id': rule_id,
+                    'category': category,
+                    'description': description,
+                    'recommendation': recommendation,
+                    'severity': severity,
+                    'content': rule.get("content", "analysis"),
+                    'level': level,
+                    'workspace_id': workspace_id,
+                    'workspace_name': workspace_name,
+                    'lakehouse_name': lh_info['lakehouse_name'],
+                    'lakehouse_id': lakehouse_id,
+                    'schema_name': schema_name,
+                    'table_name': lh_info['table_name'],
+                    'column_name': cf.get('column_name', 'N/A'),
+                    'result': cf_result.strip() if isinstance(cf_result, str) else cf_result,
+                    'scan_date': scan_ts,
+                    'remediation_script': cf_remediation
+                })
+            continue  # Skip the single-row output below
+        
         # Skip empty results (rule returned nothing to check)
         if not rule_result or (isinstance(rule_result, str) and rule_result.strip() == ''):
             continue
@@ -685,7 +750,7 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
         # database/lakehouse level: only lakehouse_name, rest N/A
         # schema level: schema_name filled, table/column N/A
         # table level: table_name filled, column N/A
-        # column level: table_name + column_name filled
+        # column level (no _column_findings): table_name filled, column N/A
         if level in ('lakehouse', 'database'):
             out_schema = 'N/A'
             out_table = 'N/A'
@@ -694,11 +759,7 @@ def analyze_table_rules(table_path, workspace_id=None, workspace_name=None, lake
             out_schema = schema_name
             out_table = 'N/A'
             out_column = 'N/A'
-        elif level == 'column':
-            out_schema = schema_name
-            out_table = lh_info['table_name']
-            out_column = 'N/A'  # Default; rules put column details in result text
-        else:  # table level (default)
+        else:  # table or column without per-column findings
             out_schema = schema_name
             out_table = lh_info['table_name']
             out_column = 'N/A'
